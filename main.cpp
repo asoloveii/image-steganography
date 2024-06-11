@@ -1,4 +1,3 @@
-#include <fmt/core.h>
 #include "core/core.h"
 
 auto main(int argc, char *argv[]) -> int {
@@ -16,7 +15,6 @@ auto main(int argc, char *argv[]) -> int {
             execute();
             break;
         default:
-            throw std::invalid_argument("Invalid number of arguments, try -help, -h to know more about the program.");
+            throw std::invalid_argument("Invalid number of arguments, try -help or -h to know more about the program.");
     }
-
 }

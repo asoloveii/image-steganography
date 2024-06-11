@@ -3,25 +3,47 @@
 auto execute(std::string const& flag, std::string const& path, std::string const& msg) -> void {
     switch(hashFlag(flag)) {
         case FlagAlias::INFO:
+            if (path.empty()) {
+                throw std::invalid_argument("No filepath is given");
+            }
             info(path);
+            if (!msg.empty()) {
+                throw std::invalid_argument("Too many arguments");
+            }
             break;
         case FlagAlias::ENCRYPT:
+            if (path.empty() || msg.empty()) {
+                throw std::invalid_argument("Not enough arguments");
+            }
             encrypt(path, msg);
             break;
         case FlagAlias::DECRYPT:
+            if (path.empty()) {
+                throw std::invalid_argument("No filepath is given");
+            }
             decrypt(path);
+            if (!msg.empty()) {
+                throw std::invalid_argument("Too many arguments");
+            }
             break;
         case FlagAlias::CHECK:
+            if (path.empty() || msg.empty()) {
+                throw std::invalid_argument("Not enough arguments");
+            }
             check(path, msg);
             break;
         case FlagAlias::HELP:
-        default: help();
+        default:
+            if (!path.empty() || !msg.empty()) {
+                throw std::invalid_argument("Too many arguments");
+            }
+            help();
     }
 }
 
 auto info(std::string const& filepath) -> void {
     auto img = Image(filepath);
-    fmt::println("File format: {}", img.imageType2String(img.getType()));
+    fmt::println("File format: {}", img.imageTypeToString(img.getType())); // will not work with Image.method
     fmt::println("Memory usage: {} (bytes)", img.getSize());
     fmt::println("Size: {}x{}", img.getWidth(), img.getHeight());
     auto formattedDate = std::format("{}",  img.getLastModified());
@@ -31,7 +53,6 @@ auto info(std::string const& filepath) -> void {
 auto encrypt(std::string const& filepath, std::string const& msg) -> void {
     auto img = Image(filepath);
     img.encrypt(msg);
-    img.writeData(filepath);
     fmt::println("Message has been encrypted");
 };
 
@@ -46,15 +67,15 @@ auto check(std::string const& filepath, std::string const& msg) -> void {
 };
 
 auto help() -> void {
-    fmt::println("This is an image steganography project from Arseni Salavei, s31726, 39c\n\n"
+    fmt::println("\nThis is an Image Steganography project, created by Arseni Salavei, s31726, 39c\n\n"
                  "Program supports .BMP, .PNG file formats\n"
                  "[FILE] - accepts an absolute path to the file\n"
-                 "[MESSAGE] - if a message contains backspaces, should be enclosed in quotes\n");
+                 "[MESSAGE] - if a message contains backspaces, then it should be enclosed in quotes \"\"\n");
 
     fmt::println("Functionalities: ");
-    fmt::println("-i, -info [FILE]\n\tprints information about an image");
+    fmt::println("-i, -info [FILE]\n\treturns information about an image");
     fmt::println("-e, -encrypt [FILE] [MESSAGE]\n\tencrypts a message into the file");
-    fmt::println("-d, -decrypt [FILE]\n\tprints a secret message from the file");
+    fmt::println("-d, -decrypt [FILE]\n\treturns a secret message from the file");
     fmt::println("-c, -check [FILE] [MESSAGE]\n\tchecks if message can be encrypted into the file");
 }
 
