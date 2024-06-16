@@ -3,40 +3,28 @@
 auto execute(std::string const& flag, std::string const& path, std::string const& msg) -> void {
     switch(hashFlag(flag)) {
         case FlagAlias::INFO:
-            if (path.empty()) {
-                throw std::invalid_argument("No filepath is given");
-            }
+            if (path.empty()) throw std::invalid_argument("No filepath is given");
             info(path);
-            if (!msg.empty()) {
-                throw std::invalid_argument("Too many arguments");
-            }
+            // if first two arguments are correct, the info prints and for any other arguments the message will appear
+            if (!msg.empty()) throw std::invalid_argument("Too many arguments");
             break;
         case FlagAlias::ENCRYPT:
-            if (path.empty() || msg.empty()) {
-                throw std::invalid_argument("Not enough arguments");
-            }
+            if (path.empty() || msg.empty()) throw std::invalid_argument("Not enough arguments");
             encrypt(path, msg);
             break;
         case FlagAlias::DECRYPT:
-            if (path.empty()) {
-                throw std::invalid_argument("No filepath is given");
-            }
+            if (path.empty()) throw std::invalid_argument("No filepath is given");
             decrypt(path);
-            if (!msg.empty()) {
-                throw std::invalid_argument("Too many arguments");
-            }
+            // if first two arguments are correct, the info prints and for any other arguments the message will appear
+            if (!msg.empty()) throw std::invalid_argument("Too many arguments");
             break;
         case FlagAlias::CHECK:
-            if (path.empty() || msg.empty()) {
-                throw std::invalid_argument("Not enough arguments");
-            }
+            if (path.empty() || msg.empty()) throw std::invalid_argument("Not enough arguments");
             check(path, msg);
             break;
         case FlagAlias::HELP:
         default:
-            if (!path.empty() || !msg.empty()) {
-                throw std::invalid_argument("Too many arguments");
-            }
+            if (!path.empty() || !msg.empty()) throw std::invalid_argument("Too many arguments");
             help();
     }
 }

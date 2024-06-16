@@ -27,30 +27,86 @@ Image::Image(std::string const& filepath) {
     image.read(bytes.data(), bytes.size());
     image.close();
 
+    p_size = size;
+    p_data = bytes;
+
+    if (p_type == ImageType::PNG) {
+        findIDATChunk();
+    } else if (p_type == ImageType::BMP) {
+        findBMPDataIndices();
+    }
+
+    crcTable = generateCRCTable();
+
     // for a specified file format extract width and height
     switch(p_type) {
         case ImageType::PNG:
-            /*
-            unsigned char buf[8];
-            image.seekg(16);
-            image.read(reinterpret_cast<char*>(&buf), 8);
-            p_width = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + (buf[3] << 0);
-            p_height = (buf[4] << 24) + (buf[5] << 16) + (buf[6] << 8) + (buf[7] << 0);
-            */
-            p_width = static_cast<int>(bytes[16])
-                    | static_cast<int>(bytes[21] << 8)
-                    | static_cast<int>(bytes[22] << 16)
-                    | static_cast<int>(bytes[23] << 24);
-            p_height = static_cast<int>(bytes[20] | (bytes[21] << 8) | (bytes[22] << 16) | (bytes[23] << 24));
+            // I hate c++
+            p_width = (static_cast<unsigned char>(bytes[16]) << 24) |
+                      (static_cast<unsigned char>(bytes[17]) << 16) |
+                      (static_cast<unsigned char>(bytes[18]) << 8)  |
+                      (static_cast<unsigned char>(bytes[19]));
+            p_height = (static_cast<unsigned char>(bytes[20]) << 24) |
+                       (static_cast<unsigned char>(bytes[21]) << 16) |
+                       (static_cast<unsigned char>(bytes[22]) << 8)  |
+                       (static_cast<unsigned char>(bytes[23]));
             break;
         case ImageType::BMP:
-            p_width = static_cast<int>(bytes[18] | (bytes[19] << 8));
-            p_height = static_cast<int>(bytes[22] | (bytes[23] << 8));
+            p_width = (static_cast<unsigned char>(bytes[21]) << 24) |
+                      (static_cast<unsigned char>(bytes[20]) << 16) |
+                      (static_cast<unsigned char>(bytes[19]) << 8)  |
+                      (static_cast<unsigned char>(bytes[18]));
+            p_height = (static_cast<unsigned char>(bytes[25]) << 24) |
+                       (static_cast<unsigned char>(bytes[24]) << 16) |
+                       (static_cast<unsigned char>(bytes[23]) << 8)  |
+                       (static_cast<unsigned char>(bytes[22]));
             break;
     }
+}
 
-    p_data = bytes;
-    p_size = size;
+auto Image::findIDATChunk() -> void {
+    const char IDAT[] = { 'I', 'D', 'A', 'T' };
+    size_t pos = 8; // Skip PNG signature
+    p_begin_data_idx = 0;
+    p_end_data_idx = 0;
+
+    while (pos < p_size) {
+
+        uint32_t chunkLength = static_cast<uint8_t>(p_data[pos]) << 24 |
+                               static_cast<uint8_t>(p_data[pos + 1]) << 16 |
+                               static_cast<uint8_t>(p_data[pos + 2]) << 8 |
+                               static_cast<uint8_t>(p_data[pos + 3]);
+
+        if (std::memcmp(&p_data[pos + 4], IDAT, 4) == 0) {
+            if (p_begin_data_idx == 0) {
+                p_begin_data_idx = pos + 8; // Start after length and type
+            }
+            p_end_data_idx = pos + 8 + chunkLength; // End at the end of this IDAT chunk
+        }
+        pos += 8 + chunkLength + 4; // Move to the next chunk (length + type + CRC)
+    }
+
+    if (p_begin_data_idx == 0 || p_end_data_idx == 0) {
+        fmt::println("Failed to locate IDAT chunk.");
+
+        throw std::runtime_error("IDAT chunk not found");
+    }
+}
+
+auto Image::findBMPDataIndices() -> void {
+    p_begin_data_idx = *reinterpret_cast<uint32_t*>(p_data.data() + 10);
+    p_end_data_idx = p_size;
+}
+
+auto Image::setLSB(char& byte, bool bit) -> void {
+    if (bit)
+        byte = (byte & 0xFE) | 0x01; // set lsb to 1
+    else
+        byte = byte & 0xFE; // set lsb to 0
+}
+
+auto Image::getLSB(char byte) const -> bool {
+    return byte & 0x01; // Return LSB (bit 0)
 }
 
 auto Image::getData() const -> std::vector<char> { return p_data; }
@@ -76,11 +132,79 @@ auto Image::saveData() -> void {
 }
 
 auto Image::check(std::string const& message) const -> bool {
-    // convert message to binary
-    auto binary_message = stringToBinary(message);
+    size_t messageLength = message.size();
+    size_t requiredSpace = 32 + messageLength * 8;  // 32 bits for length + 8 bits per character
+    return requiredSpace <= (p_end_data_idx - p_begin_data_idx);
+}
 
-    // check if message length can fit in the image
-    return p_size >= binary_message.size() * 8;
+auto Image::generateCRCTable() -> std::vector<uint32_t> {
+    std::vector<uint32_t> table(256);
+    uint32_t polynomial = 0xEDB88320;
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint32_t crc = i;
+        for (uint32_t j = 0; j < 8; ++j) {
+            if (crc & 1) {
+                crc = (crc >> 1) ^ polynomial;
+            } else {
+                crc >>= 1;
+            }
+        }
+        table[i] = crc;
+    }
+    return table;
+}
+
+auto Image::calculateCRC(const char* data, size_t length) -> uint32_t {
+    uint32_t crc = 0xFFFFFFFF;
+    for (size_t i = 0; i < length; ++i) {
+        uint8_t byte = static_cast<uint8_t>(data[i]);
+        crc = (crc >> 8) ^ crcTable[(crc ^ byte) & 0xFF];
+    }
+    return crc ^ 0xFFFFFFFF;
+}
+
+auto Image::recalculateCRC() -> void {
+    if (p_type != ImageType::PNG) {
+        throw std::runtime_error("CRC recalculation is only applicable for PNG images.");
+    }
+
+    size_t pos = 8; // Skip PNG signature
+
+    while (pos < p_size) {
+        uint32_t chunkLength = static_cast<uint8_t>(p_data[pos]) << 24 |
+                               static_cast<uint8_t>(p_data[pos + 1]) << 16 |
+                               static_cast<uint8_t>(p_data[pos + 2]) << 8 |
+                               static_cast<uint8_t>(p_data[pos + 3]);
+
+        if (std::memcmp(&p_data[pos + 4], "IDAT", 4) == 0) {
+            uint32_t crc = calculateCRC(&p_data[pos + 4], 4 + chunkLength);
+            char* chunkCRC = &p_data[pos + 8 + chunkLength];
+            chunkCRC[0] = (crc >> 24) & 0xFF;
+            chunkCRC[1] = (crc >> 16) & 0xFF;
+            chunkCRC[2] = (crc >> 8) & 0xFF;
+            chunkCRC[3] = crc & 0xFF;
+        }
+
+        pos += 8 + chunkLength + 4;
+        /*
+        char* chunkType = &p_data[pos + 4];
+        char* chunkData = &p_data[pos + 8];
+        char* chunkCRC = &p_data[pos + 8 + chunkLength];
+
+        // Calculate CRC for the chunk type and data
+        uint32_t crc = calculateCRC(chunkData, chunkLength);
+
+        // Rewrite CRC value in the file
+        chunkCRC[0] = (crc >> 24) & 0xFF;
+        chunkCRC[1] = (crc >> 16) & 0xFF;
+        chunkCRC[2] = (crc >> 8) & 0xFF;
+        chunkCRC[3] = crc & 0xFF;
+
+        // Move to the next chunk (length + type + data + CRC)
+        pos += 8 + chunkLength + 4;
+         */
+
+    }
 }
 
 auto Image::encrypt(std::string const& msg) -> void {
@@ -92,43 +216,73 @@ auto Image::encrypt(std::string const& msg) -> void {
 
     auto message = stringToBinary(msg);
 
-    size_t message_index = 0;
-    for (size_t image_index = 0; image_index < p_size && message_index < message.size(); ++image_index) {
-        // extract a bit from the current message byte:
-        char current_bit = message[message_index][7] ? 1 : 0; // extract the least significant bit
-
-        // modify the least significant bit of the current image byte:
-        p_data[image_index] &= ~1; // clear the least significant bit
-        p_data[image_index] |= current_bit; // set the least significant bit with the message bit
-
-        // move to the next message bit:
-        if (++message_index % 8 == 0) {
-            // reached the end of a byte in the message, move to the next message byte
-        }
+    // embed message length in the first 32 bits (4 bytes) of the image data
+    size_t messageLength = message.size();
+    for (int i = 0; i < 32; ++i) {
+        size_t imageIndex = p_begin_data_idx + i;
+        char& byte = p_data[imageIndex];
+        bool bit = (messageLength >> (31 - i)) & 1;
+        setLSB(byte, bit);
     }
 
-    // save modifications to the file
+    // embed each bit of the message into the LSB of the image data
+    size_t messageIndex = 0;
+    for (size_t imageIndex = p_begin_data_idx + 32;
+         imageIndex < p_end_data_idx && messageIndex < message.size() * 8;
+         ++imageIndex)
+    {
+        // Extract a bit from the current message byte:
+        char currentBit = message[messageIndex / 8][7 - (messageIndex % 8)];
+        // modify the lsb of the current image byte
+        setLSB(p_data[imageIndex], currentBit);
+        // Move to the next message bit:
+        ++messageIndex;
+    }
+
+    // Update last modified time and size
+    p_last_modified = std::filesystem::last_write_time(p_path);
+    p_size = p_data.size();
+
+    if (p_type==ImageType::PNG) recalculateCRC();
+
+    // Save modified data back to file
     saveData();
 }
 
 auto Image::decrypt() const -> std::string {
-    auto message = std::vector<std::bitset<8>>();
+    std::string extractedMessage;
 
-    for (size_t image_index = 0; image_index < p_data.size(); ++image_index) {
-        // extract the least significant bit:
-        char current_bit = p_data[image_index] & 1;
-
-        // create a new bitset for the message byte if needed:
-        if (message.empty() || message.back().size() == 8) {
-            message.push_back(std::bitset<8>());
-        }
-
-        // add the extracted bit to the current message byte:
-        message.back() <<= 1;
-        message.back().set(0, current_bit);
+    size_t messageLength = 0;
+    for (int i = 0; i < 32; ++i) {
+        const char& byte = p_data[p_begin_data_idx + i];
+        bool bit = getLSB(byte);
+        messageLength |= (bit << (31 - i));
     }
 
-    return binaryToString(message);
+    // extract message bits from the image data
+    std::vector<std::bitset<8>> messageBits(messageLength);
+    size_t messageIndex = 0;
+    for (size_t imageIndex = p_begin_data_idx + 32;
+         imageIndex < p_end_data_idx && messageIndex < messageLength * 8;
+         ++imageIndex)
+    {
+         // extract the LSB from the current image byte:
+        bool bit = getLSB(p_data[imageIndex]);
+
+        // store the bit in the appropriate position in the message bits:
+        messageBits[messageIndex / 8][7 - (messageIndex % 8)] = bit;
+
+        // move to the next message bit:
+        ++messageIndex;
+    }
+
+    fmt::println("{}", p_end_data_idx);
+    for (int i=0; i < messageLength; i++) fmt::println("{}", messageBits[i].to_string());
+
+    // convert bitsets back to characters to form the extracted message
+    extractedMessage = binaryToString(messageBits);
+
+    return extractedMessage;
 }
 
 auto Image::hashImageType(std::filesystem::path const& path) -> ImageType {
@@ -147,27 +301,17 @@ auto Image::imageTypeToString(ImageType const& type) -> std::string {
 }
 
 auto Image::stringToBinary(std::string const& message) -> std::vector<std::bitset<8>> {
-    auto out = std::vector<std::bitset<8>>();
-    for (std::size_t i = 0; i < message.size(); ++i)
-    {
-        out.emplace_back(message.c_str()[i]);
+    std::vector<std::bitset<8>> result;
+    for (char ch : message) {
+        result.push_back(std::bitset<8>(ch));
     }
-    return out;
+    return result;
 }
 
 auto Image::binaryToString(std::vector<std::bitset<8>> const& msg) -> std::string {
     std::string result;
-
-    // Iterate through each bitset in the message
-    for (const auto& bitset : msg) {
-        // Convert the bitset to a string representation (1s and 0s)
-        int char_value = bitset.to_ulong();
-
-        // Check for valid ASCII range (0 - 127 for printable characters)
-        if (char_value >= 0 && char_value <= 127) {
-            // Cast the value to a char and append it to the result
-            result += static_cast<char>(char_value);
-        }
+    for (auto const& bits : msg) {
+        result.push_back(static_cast<char>(bits.to_ulong()));
     }
 
     return result;
