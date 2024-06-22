@@ -1,5 +1,5 @@
 # image-steganography
-This is a project from my second semester subject "Introduction to C++".
+The program uses LSB algorithm for encryption.
 
 ## Constants
 [FILE] - an absolute path to the file
